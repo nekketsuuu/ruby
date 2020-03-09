@@ -59,6 +59,7 @@ rb_call_inits(void)
     CALL(Binding);
     CALL(Math);
     CALL(GC);
+    CALL(Guild);
     CALL(Enumerator);
     CALL(VM);
     CALL(ISeq);
@@ -78,6 +79,7 @@ rb_call_inits(void)
 
 #define BUILTIN(n) CALL(builtin_##n)
     BUILTIN(gc);
+    BUILTIN(guild);
     BUILTIN(io);
     BUILTIN(ast);
     BUILTIN(trace_point);

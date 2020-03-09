@@ -1401,6 +1401,8 @@ RHASH_ITER_LEV(VALUE hash)
     }
 }
 
+#include "guild.h"
+
 static void
 hash_iter_lev_inc(VALUE hash)
 {
@@ -1411,7 +1413,7 @@ hash_iter_lev_inc(VALUE hash)
     }
     else {
         lev += 1;
-        RBASIC(hash)->flags = ((RBASIC(hash)->flags & ~RHASH_LEV_MASK) | (lev << RHASH_LEV_SHIFT));
+        RBASIC(hash)->flags = ((RBASIC(hash)->flags & ~RHASH_LEV_MASK) | ((VALUE)lev << RHASH_LEV_SHIFT));
         if (lev == RHASH_LEV_MAX) {
             iter_lev_in_ivar_set(hash, lev);
         }
