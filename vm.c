@@ -3389,7 +3389,7 @@ Init_BareVM(void)
     rb_thread_set_current_raw(th);
     ruby_thread_init_stack(th);
 
-    th->guild = rb_guild_main_alloc();
+    vm->main_guild = th->guild = rb_guild_main_alloc();
 }
 
 void
