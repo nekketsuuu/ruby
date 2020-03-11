@@ -46,7 +46,7 @@ static VALUE autoload_featuremap; /* feature => autoload_i */
 static void check_before_mod_set(VALUE, ID, VALUE, const char *);
 static void setup_const_entry(rb_const_entry_t *, VALUE, VALUE, rb_const_flag_t);
 static VALUE rb_const_search(VALUE klass, ID id, int exclude, int recurse, int visibility);
-static st_table *generic_iv_tbl;
+static st_table *generic_iv_tbl_;
 
 struct ivar_update {
     union {
@@ -60,7 +60,7 @@ struct ivar_update {
 void
 Init_var_tables(void)
 {
-    generic_iv_tbl = st_init_numtable();
+    generic_iv_tbl_ = st_init_numtable();
     autoload = rb_intern_const("__autoload__");
     /* __classpath__: fully qualified class path */
     classpath = rb_intern_const("__classpath__");
@@ -863,22 +863,41 @@ rb_alias_variable(ID name1, ID name2)
     entry1->var = entry2->var;
 }
 
+#define IVAR_ACCESSOR_SHOULD_BE_MAIN_GUILD() \
+  if (UNLIKELY(!rb_guild_main_p())) { \
+      rb_raise(rb_eRuntimeError, "can not access instance variables of classes/modules from non-main guild."); \
+  }
+
+#define CVAR_ACCESSOR_SHOULD_BE_MAIN_GUILD() \
+  if (UNLIKELY(!rb_guild_main_p())) { \
+      rb_raise(rb_eRuntimeError, "can not access class variables from non-main guild."); \
+  }
+
+static inline struct st_table *
+generic_ivtbl(VALUE obj)
+{
+    if (UNLIKELY(rb_guild_sharable_p(obj) && !rb_guild_main_p())) {
+        rb_raise(rb_eRuntimeError, "can not access instance variables of sharable objects from non-main guild.");
+    }
+    return generic_iv_tbl_;
+}
+
+MJIT_FUNC_EXPORTED struct st_table *
+rb_ivar_generic_ivtbl(VALUE obj)
+{
+    return generic_ivtbl(obj);
+}
+
 static int
 gen_ivtbl_get(VALUE obj, struct gen_ivtbl **ivtbl)
 {
     st_data_t data;
 
-    if (st_lookup(generic_iv_tbl, (st_data_t)obj, &data)) {
+    if (st_lookup(generic_ivtbl(obj), (st_data_t)obj, &data)) {
 	*ivtbl = (struct gen_ivtbl *)data;
 	return 1;
     }
     return 0;
-}
-
-MJIT_FUNC_EXPORTED struct st_table *
-rb_ivar_generic_ivtbl(void)
-{
-    return generic_iv_tbl;
 }
 
 static VALUE
@@ -1053,8 +1072,8 @@ rb_mv_generic_ivar(VALUE rsrc, VALUE dst)
     st_data_t key = (st_data_t)rsrc;
     struct gen_ivtbl *ivtbl;
 
-    if (st_delete(generic_iv_tbl, &key, (st_data_t *)&ivtbl))
-        st_insert(generic_iv_tbl, (st_data_t)dst, (st_data_t)ivtbl);
+    if (st_delete(generic_ivtbl(rsrc), &key, (st_data_t *)&ivtbl))
+        st_insert(generic_ivtbl(dst), (st_data_t)dst, (st_data_t)ivtbl);
 }
 
 void
@@ -1063,7 +1082,7 @@ rb_free_generic_ivar(VALUE obj)
     st_data_t key = (st_data_t)obj;
     struct gen_ivtbl *ivtbl;
 
-    if (st_delete(generic_iv_tbl, &key, (st_data_t *)&ivtbl))
+    if (st_delete(generic_ivtbl(obj), &key, (st_data_t *)&ivtbl))
 	xfree(ivtbl);
 }
 
@@ -1115,6 +1134,7 @@ rb_ivar_lookup(VALUE obj, ID id, VALUE undef)
 	break;
       case T_CLASS:
       case T_MODULE:
+        IVAR_ACCESSOR_SHOULD_BE_MAIN_GUILD();
 	if (RCLASS_IV_TBL(obj) &&
 		st_lookup(RCLASS_IV_TBL(obj), (st_data_t)id, &index))
 	    return (VALUE)index;
@@ -1171,6 +1191,7 @@ rb_ivar_delete(VALUE obj, ID id, VALUE undef)
 	break;
       case T_CLASS:
       case T_MODULE:
+        IVAR_ACCESSOR_SHOULD_BE_MAIN_GUILD();
 	if (RCLASS_IV_TBL(obj) &&
 		st_delete(RCLASS_IV_TBL(obj), (st_data_t *)&id, &index))
 	    return (VALUE)index;
@@ -1227,7 +1248,7 @@ generic_ivar_set(VALUE obj, ID id, VALUE val)
     ivup.iv_extended = 0;
     ivup.u.iv_index_tbl = iv_index_tbl_make(obj);
     iv_index_tbl_extend(&ivup, id);
-    st_update(generic_iv_tbl, (st_data_t)obj, generic_ivar_update,
+    st_update(generic_ivtbl(obj), (st_data_t)obj, generic_ivar_update,
 	      (st_data_t)&ivup);
 
     ivup.u.ivtbl->ivptr[ivup.index] = val;
@@ -1351,6 +1372,7 @@ ivar_set(VALUE obj, ID id, VALUE val)
         break;
       case T_CLASS:
       case T_MODULE:
+        IVAR_ACCESSOR_SHOULD_BE_MAIN_GUILD();
         if (!RCLASS_IV_TBL(obj)) RCLASS_IV_TBL(obj) = st_init_numtable();
         rb_class_ivar_set(obj, id, val);
         break;
@@ -1397,6 +1419,7 @@ rb_ivar_defined(VALUE obj, ID id)
 	break;
       case T_CLASS:
       case T_MODULE:
+        IVAR_ACCESSOR_SHOULD_BE_MAIN_GUILD();
 	if (RCLASS_IV_TBL(obj) && st_is_member(RCLASS_IV_TBL(obj), (st_data_t)id))
 	    return Qtrue;
 	break;
@@ -1540,7 +1563,8 @@ rb_copy_generic_ivar(VALUE clone, VALUE obj)
 	 * c.ivtbl may change in gen_ivar_copy due to realloc,
 	 * no need to free
 	 */
-	st_insert(generic_iv_tbl, (st_data_t)clone, (st_data_t)c.ivtbl);
+        generic_ivtbl(clone);
+	st_insert(generic_ivtbl(obj), (st_data_t)clone, (st_data_t)c.ivtbl);
     }
     return;
 
@@ -1561,6 +1585,7 @@ rb_ivar_foreach(VALUE obj, rb_ivar_foreach_callback_func *func, st_data_t arg)
 	break;
       case T_CLASS:
       case T_MODULE:
+        IVAR_ACCESSOR_SHOULD_BE_MAIN_GUILD();
 	if (RCLASS_IV_TBL(obj)) {
 	    st_foreach_safe(RCLASS_IV_TBL(obj), func, arg);
 	}
@@ -1595,6 +1620,7 @@ rb_ivar_count(VALUE obj)
 	break;
       case T_CLASS:
       case T_MODULE:
+        IVAR_ACCESSOR_SHOULD_BE_MAIN_GUILD();
 	if ((tbl = RCLASS_IV_TBL(obj)) != 0) {
 	    return tbl->num_entries;
 	}
@@ -1724,6 +1750,7 @@ rb_obj_remove_instance_variable(VALUE obj, VALUE name)
 	break;
       case T_CLASS:
       case T_MODULE:
+        IVAR_ACCESSOR_SHOULD_BE_MAIN_GUILD();
 	n = id;
 	if (RCLASS_IV_TBL(obj) && st_delete(RCLASS_IV_TBL(obj), &n, &v)) {
 	    return (VALUE)v;
@@ -3144,6 +3171,7 @@ cvar_overtaken(VALUE front, VALUE target, ID id)
     }
 
 #define CVAR_LOOKUP(v,r) do {\
+    CVAR_ACCESSOR_SHOULD_BE_MAIN_GUILD(); \
     if (cvar_lookup_at(klass, id, (v))) {r;}\
     CVAR_FOREACH_ANCESTORS(klass, v, r);\
 } while(0)
