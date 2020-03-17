@@ -957,7 +957,6 @@ typedef struct rb_thread_struct {
             VALUE proc;
             VALUE args;
             int kw_splat;
-            VALUE self_class; // only for guild
         } proc;
         struct {
             VALUE (*func)(void *);
