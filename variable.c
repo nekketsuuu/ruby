@@ -37,6 +37,7 @@
 #include "vm_core.h"
 #include "guild.h"
 
+static struct rb_id_table *rb_global_tbl;
 static ID autoload, classpath, tmp_classpath;
 static VALUE autoload_featuremap; /* feature => autoload_i */
 
@@ -57,6 +58,7 @@ struct ivar_update {
 void
 Init_var_tables(void)
 {
+    rb_global_tbl = rb_id_table_create(0);
     generic_iv_tbl_ = st_init_numtable();
     autoload = rb_intern_const("__autoload__");
     /* __classpath__: fully qualified class path */
@@ -325,9 +327,10 @@ struct rb_global_entry {
 struct rb_id_table *
 global_tbl(void)
 {
-    rb_guild_t *g = GET_GUILD();
-    struct rb_id_table *tbl = rb_guild_global_tbl(g);
-    return tbl;
+    if (!rb_guild_main_p()) {
+        rb_raise(rb_eRuntimeError, "can not access global variables from non-main guild."); \
+    }
+    return rb_global_tbl;
 }
 
 static struct rb_global_entry*
@@ -453,10 +456,10 @@ mark_global_entry(VALUE v, void *ignored)
 }
 
 void
-rb_guild_mark_global_tbl(struct rb_id_table *tbl)
+rb_gc_mark_global_tbl(void)
 {
-    if (tbl) {
-        rb_id_table_foreach_values(tbl, mark_global_entry, 0);
+    if (rb_global_tbl) {
+        rb_id_table_foreach_values(rb_global_tbl, mark_global_entry, 0);
     }
 }
 
