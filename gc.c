@@ -102,7 +102,7 @@
 #include "transient_heap.h"
 #include "vm_core.h"
 #include "vm_callinfo.h"
-#include "guild.h"
+#include "ractor.h"
 
 #include "builtin.h"
 
@@ -2109,8 +2109,8 @@ newobj_init(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_prote
     };
     MEMCPY(RANY(obj), &buf, RVALUE, 1);
 
-#if GUILD_CHECK_MODE
-    rb_guild_setup_belonging(obj);
+#if RACTOR_CHECK_MODE
+    rb_ractor_setup_belonging(obj);
 #endif
 
 #if RGENGC_CHECK_MODE
