@@ -1048,7 +1048,21 @@ struct io_internal_read_struct {
     int nonblock;
     void *buf;
     size_t capa;
+    VALUE th;
 };
+
+static struct io_internal_read_struct
+io_internal_read_struct_setup(int fd, int nonblock, void *buf, size_t capa)
+{
+    struct io_internal_read_struct iis = {
+        .fd = fd,
+        .nonblock = nonblock,
+        .buf = buf,
+        .capa = capa,
+        .th = rb_thread_current(),
+    };
+    return iis;
+}
 
 struct io_internal_write_struct {
     int fd;
@@ -1064,7 +1078,7 @@ struct io_internal_writev_struct {
 };
 #endif
 
-static int nogvl_wait_for_single_fd(int fd, short events);
+static int nogvl_wait_for_single_fd(int fd, short events, VALUE thval);
 static VALUE
 internal_read_func(void *ptr)
 {
@@ -1075,7 +1089,7 @@ retry:
     if (r < 0 && !iis->nonblock) {
         int e = errno;
         if (e == EAGAIN || e == EWOULDBLOCK) {
-            if (nogvl_wait_for_single_fd(iis->fd, RB_WAITFD_IN) != -1) {
+            if (nogvl_wait_for_single_fd(iis->fd, RB_WAITFD_IN, iis->th) != -1) {
                 goto retry;
             }
             errno = e;
@@ -1118,13 +1132,7 @@ internal_writev_func(void *ptr)
 static ssize_t
 rb_read_internal(int fd, void *buf, size_t count)
 {
-    struct io_internal_read_struct iis;
-
-    iis.fd = fd;
-    iis.nonblock = 0;
-    iis.buf = buf;
-    iis.capa = count;
-
+    struct io_internal_read_struct iis = io_internal_read_struct_setup(fd, 0, buf, count);
     return (ssize_t)rb_thread_io_blocking_region(internal_read_func, &iis, fd);
 }
 
@@ -2897,10 +2905,7 @@ io_getpartial(int argc, VALUE *argv, VALUE io, int no_exception, int nonblock)
             rb_io_set_nonblock(fptr);
         }
 	io_setstrbuf(&str, len);
-        iis.fd = fptr->fd;
-        iis.nonblock = nonblock;
-        iis.buf = RSTRING_PTR(str);
-        iis.capa = len;
+        iis = io_internal_read_struct_setup(fptr->fd, nonblock, RSTRING_PTR(str), len);
         n = read_internal_locktmp(str, &iis);
         if (n < 0) {
 	    int e = errno;
@@ -3035,10 +3040,7 @@ io_read_nonblock(rb_execution_context_t *ec, VALUE io, VALUE length, VALUE str, 
     if (n <= 0) {
 	rb_io_set_nonblock(fptr);
 	shrinkable |= io_setstrbuf(&str, len);
-        iis.fd = fptr->fd;
-        iis.nonblock = 1;
-        iis.buf = RSTRING_PTR(str);
-        iis.capa = len;
+        iis = io_internal_read_struct_setup(fptr->fd, 1, RSTRING_PTR(str), len);
         n = read_internal_locktmp(str, &iis);
         if (n < 0) {
 	    int e = errno;
@@ -10921,9 +10923,9 @@ void * rb_thread_scheduler_wait_for_single_fd(void * _args) {
 STATIC_ASSERT(pollin_expected, POLLIN == RB_WAITFD_IN);
 STATIC_ASSERT(pollout_expected, POLLOUT == RB_WAITFD_OUT);
 static int
-nogvl_wait_for_single_fd(int fd, short events)
+nogvl_wait_for_single_fd(int fd, short events, VALUE thval)
 {
-    VALUE scheduler = rb_current_thread_scheduler();
+    VALUE scheduler = rb_thread_fiber_scheduler(thval);
     if (scheduler != Qnil) {
         struct wait_for_single_fd args = {.scheduler = scheduler, .fd = fd, .events = events};
         rb_thread_call_with_gvl(rb_thread_scheduler_wait_for_single_fd, &args);
@@ -10940,9 +10942,9 @@ nogvl_wait_for_single_fd(int fd, short events)
 #else /* !USE_POLL */
 #  define IOWAIT_SYSCALL "select"
 static int
-nogvl_wait_for_single_fd(int fd, short events)
+nogvl_wait_for_single_fd(int fd, short events, VALUE thval)
 {
-    VALUE scheduler = rb_current_thread_scheduler();
+    VALUE scheduler = rb_thread_fiber_scheduler(thval);
     if (scheduler != Qnil) {
         struct wait_for_single_fd args = {.scheduler = scheduler, .fd = fd, .events = events};
         rb_thread_call_with_gvl(rb_thread_scheduler_wait_for_single_fd, &args);
@@ -10981,7 +10983,7 @@ maygvl_copy_stream_wait_read(int has_gvl, struct copy_stream_struct *stp)
 	    ret = rb_wait_for_single_fd(stp->src_fd, RB_WAITFD_IN, NULL);
 	}
 	else {
-	    ret = nogvl_wait_for_single_fd(stp->src_fd, RB_WAITFD_IN);
+	    ret = nogvl_wait_for_single_fd(stp->src_fd, RB_WAITFD_IN, stp->th);
 	}
     } while (ret < 0 && maygvl_copy_stream_continue_p(has_gvl, stp));
 
@@ -10999,7 +11001,7 @@ nogvl_copy_stream_wait_write(struct copy_stream_struct *stp)
     int ret;
 
     do {
-	ret = nogvl_wait_for_single_fd(stp->dst_fd, RB_WAITFD_OUT);
+	ret = nogvl_wait_for_single_fd(stp->dst_fd, RB_WAITFD_OUT, stp->th);
     } while (ret < 0 && maygvl_copy_stream_continue_p(0, stp));
 
     if (ret < 0) {

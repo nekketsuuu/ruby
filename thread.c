@@ -3624,16 +3624,23 @@ rb_thread_scheduler(VALUE klass)
     return rb_current_thread_scheduler();
 }
 
+VALUE
+rb_thread_fiber_scheduler(VALUE thval)
+{
+    rb_thread_t *th = rb_thread_ptr(thval);
+
+    if (th->blocking == 0) {
+        return th->scheduler;
+    }
+    else {
+        return Qnil;
+    }
+}
+
 VALUE rb_current_thread_scheduler(void)
 {
-    rb_thread_t * th = GET_THREAD();
-
-    VM_ASSERT(th);
-
-    if (th->blocking == 0)
-        return th->scheduler;
-    else
-        return Qnil;
+    rb_thread_t *th = GET_THREAD();
+    return rb_thread_fiber_scheduler(th->self);
 }
 
 static VALUE
