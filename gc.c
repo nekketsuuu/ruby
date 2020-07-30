@@ -7027,7 +7027,12 @@ rb_gc_writebarrier(VALUE a, VALUE b)
             RB_VM_LOCK_ENTER(); // can change GC state
             {
                 if (!is_incremental_marking(objspace)) {
-                    gc_writebarrier_generational(a, b, objspace);
+                    if (!RVALUE_OLD_P(a) || RVALUE_OLD_P(b)) {
+                        // do nothing
+                    }
+                    else {
+                        gc_writebarrier_generational(a, b, objspace);
+                    }
                 }
                 else {
                     retry = true;
