@@ -1755,22 +1755,26 @@ rb_ractor_shareable_p_continue(VALUE obj)
 
       // TODO: need to cache the result or another cleverer way to avoid redundant check
       case T_ARRAY:
-        if (!RB_OBJ_FROZEN_RAW(obj)) return false;
-        {
-            int i = 0;
-            // TODO: should we need to avoid recursion to prevent stack overflow?
-            for (; i < RARRAY_LEN(obj); i++) {
+        if (!RB_OBJ_FROZEN_RAW(obj) || FL_TEST_RAW(obj, RUBY_FL_EXIVAR)) {
+            return false;
+        }
+        else {
+            for (int i = 0; i < RARRAY_LEN(obj); i++) {
                 if (!rb_ractor_shareable_p(rb_ary_entry(obj, i))) return false;
             }
+            goto shareable;
         }
-        return true;
-
       case T_HASH:
         if (!RB_OBJ_FROZEN_RAW(obj)) return false;
         {
             bool shareable = true;
             rb_hash_foreach(obj, rb_ractor_shareable_p_hash_i, (VALUE)&shareable);
-            return shareable;
+            if (shareable) {
+                goto shareable;
+            }
+            else {
+                return false;
+            }
         }
 
       default:

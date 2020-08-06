@@ -443,7 +443,6 @@ assert_equal 'can not access class variables from non-main Ractors', %q{
     end
   end
 
-
   begin
     r.take
   rescue Ractor::RemoteError => e
@@ -452,7 +451,7 @@ assert_equal 'can not access class variables from non-main Ractors', %q{
 }
 
 # Getting non-sharable objects via constants by other Ractors is not allowed
-assert_equal 'can not access non-sharable objects in constant CONST by non-main Ractors', %q{
+assert_equal 'can not access non-sharable objects in constant C::CONST by non-main Ractor.', %q{
   class C
     CONST = 'str'
   end
