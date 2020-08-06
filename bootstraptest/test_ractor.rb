@@ -329,7 +329,7 @@ assert_equal 'hello', %q{
 }
 
 # Access to global-variables are prohibitted
-assert_equal 'can not access global variables from non-main Ractors', %q{
+assert_equal 'can not access global variables $gv from non-main Ractors', %q{
   $gv = 1
   r = Ractor.new do
     $gv
@@ -343,7 +343,7 @@ assert_equal 'can not access global variables from non-main Ractors', %q{
 }
 
 # Access to global-variables are prohibitted
-assert_equal 'can not access global variables from non-main Ractors', %q{
+assert_equal 'can not access global variables $gv from non-main Ractors', %q{
   r = Ractor.new do
     $gv = 1
   end
@@ -353,6 +353,18 @@ assert_equal 'can not access global variables from non-main Ractors', %q{
   rescue Ractor::RemoteError => e
     e.cause.message
   end
+}
+
+# $stdin,out,err is Ractor local variables and duped.
+assert_equal 'ok', %q{
+  r = Ractor.new do
+    [$stdin.fileno, $stdout.fileno, $stderr.fileno]
+  end
+
+  [0, 1, 2].zip(r.take){|a, b|
+    raise if a == b
+  }
+  'ok'
 }
 
 # selfs are different objects

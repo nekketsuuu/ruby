@@ -13544,6 +13544,11 @@ Init_IO(void)
     rb_define_virtual_variable("$>",      stdout_getter, stdout_setter);
     rb_define_virtual_variable("$stderr", stderr_getter, stderr_setter);
 
+    rb_gvar_ractor_local("$stdin");
+    rb_gvar_ractor_local("$stdout");
+    rb_gvar_ractor_local("$>");
+    rb_gvar_ractor_local("$stderr");
+
     rb_stdin  = prep_stdio(stdin,  FMODE_READABLE, rb_cIO, "<STDIN>");
     rb_stdout = prep_stdio(stdout, FMODE_WRITABLE|FMODE_SIGNAL_ON_EPIPE, rb_cIO, "<STDOUT>");
     rb_stderr = prep_stdio(stderr, FMODE_WRITABLE|FMODE_SYNC, rb_cIO, "<STDERR>");

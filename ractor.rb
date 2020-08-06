@@ -73,15 +73,6 @@ class Ractor
     __builtin_cstmt! %q{
       const VALUE *rs = RARRAY_CONST_PTR_TRANSIENT(ractors);
       VALUE rv;
-      #if 0
-      for (int i=0; i<RARRAY_LENINT(ractors); i++) {
-        if (!rb_ractor_p(rs[i])) {
-          rp(rs[i]);
-          rp(rs);
-          rb_bug("!!! %d", i);
-        }
-      }
-      #endif
       VALUE v = ractor_select(ec, rs, RARRAY_LENINT(ractors),
                               yield_unspecified == Qtrue ? Qundef : yield_value,
                               (bool)RTEST(move) ? true : false, &rv);

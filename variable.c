@@ -330,16 +330,8 @@ struct rb_global_variable {
 struct rb_global_entry {
     struct rb_global_variable *var;
     ID id;
+    bool ractor_local;
 };
-
-static struct rb_id_table *
-global_tbl(void)
-{
-    if (!rb_ractor_main_p()) {
-        rb_raise(rb_eRuntimeError, "can not access global variables from non-main Ractors"); \
-    }
-    return rb_global_tbl;
-}
 
 static struct rb_global_entry*
 rb_find_global_entry(ID id)
@@ -347,12 +339,26 @@ rb_find_global_entry(ID id)
     struct rb_global_entry *entry;
     VALUE data;
 
-    if (!rb_id_table_lookup(global_tbl(), id, &data)) {
-        return NULL;
+    if (!rb_id_table_lookup(rb_global_tbl, id, &data)) {
+        entry = NULL;
     }
-    entry = (struct rb_global_entry *)data;
-    ASSUME(entry != NULL);
+    else {
+        ASSUME(entry != NULL);
+        entry = (struct rb_global_entry *)data;
+    }
+
+    if (UNLIKELY(!rb_ractor_main_p()) && (!entry || !entry->ractor_local)) {
+        rb_raise(rb_eRuntimeError, "can not access global variables %s from non-main Ractors", rb_id2name(id));
+    }
+
     return entry;
+}
+
+void
+rb_gvar_ractor_local(const char *name)
+{
+    struct rb_global_entry *entry = rb_find_global_entry(rb_intern(name));
+    entry->ractor_local = true;
 }
 
 static void
@@ -370,6 +376,7 @@ rb_global_entry(ID id)
 	var = ALLOC(struct rb_global_variable);
 	entry->id = id;
 	entry->var = var;
+        entry->ractor_local = false;
 	var->counter = 1;
 	var->data = 0;
 	var->getter = rb_gvar_undef_getter;
@@ -379,7 +386,7 @@ rb_global_entry(ID id)
 
 	var->block_trace = 0;
 	var->trace = 0;
-	rb_id_table_insert(global_tbl(), id, (VALUE)entry);
+	rb_id_table_insert(rb_global_tbl, id, (VALUE)entry);
     }
     return entry;
 }
@@ -651,18 +658,17 @@ rb_f_untrace_var(int argc, const VALUE *argv)
     ID id;
     struct rb_global_entry *entry;
     struct trace_var *trace;
-    VALUE data;
 
     rb_scan_args(argc, argv, "11", &var, &cmd);
     id = rb_check_id(&var);
     if (!id) {
 	rb_name_error_str(var, "undefined global variable %"PRIsVALUE"", QUOTE(var));
     }
-    if (!rb_id_table_lookup(global_tbl(), id, &data)) {
+    if ((entry = rb_find_global_entry(id)) == NULL) {
 	rb_name_error(id, "undefined global variable %"PRIsVALUE"", QUOTE_ID(id));
     }
 
-    trace = (entry = (struct rb_global_entry *)data)->var->trace;
+    trace = entry->var->trace;
     if (NIL_P(cmd)) {
 	VALUE ary = rb_ary_new();
 
@@ -806,7 +812,11 @@ rb_f_global_variables(void)
     VALUE ary = rb_ary_new();
     VALUE sym, backref = rb_backref_get();
 
-    rb_id_table_foreach(global_tbl(), gvar_i, (void *)ary);
+    if (!rb_ractor_main_p()) {
+        rb_raise(rb_eRuntimeError, "can not access global variables from non-main Ractors");
+    }
+
+    rb_id_table_foreach(rb_global_tbl, gvar_i, (void *)ary);
     if (!NIL_P(backref)) {
 	char buf[2];
 	int i, nmatch = rb_match_count(backref);
@@ -833,7 +843,11 @@ rb_alias_variable(ID name1, ID name2)
 {
     struct rb_global_entry *entry1, *entry2;
     VALUE data1;
-    struct rb_id_table *gtbl = global_tbl();
+    struct rb_id_table *gtbl = rb_global_tbl;
+
+    if (!rb_ractor_main_p()) {
+        rb_raise(rb_eRuntimeError, "can not access global variables from non-main Ractors");
+    }
 
     entry2 = rb_global_entry(name2);
     if (!rb_id_table_lookup(gtbl, name1, &data1)) {
