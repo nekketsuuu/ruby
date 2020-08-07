@@ -479,6 +479,14 @@ assert_equal 'can not set constants with non-shareable objects by non-main Racto
   end
 }
 
+# Immutable Array and Hash are shareable, so it can be shared with constants
+assert_equal '[1000, 3]', %q{
+  A = Array.new(1000).freeze # [nil, ...]
+  H = {a: 1, b: 2, c: 3}.freeze
+
+  Ractor.new{ [A.size, H.size] }.take
+}
+
 # A Ractor can have a name
 assert_equal 'test-name', %q{
   r = Ractor.new name: 'test-name' do
