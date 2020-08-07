@@ -343,8 +343,8 @@ rb_find_global_entry(ID id)
         entry = NULL;
     }
     else {
-        ASSUME(entry != NULL);
         entry = (struct rb_global_entry *)data;
+        RUBY_ASSERT(entry != NULL);
     }
 
     if (UNLIKELY(!rb_ractor_main_p()) && (!entry || !entry->ractor_local)) {
