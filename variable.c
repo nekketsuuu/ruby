@@ -894,9 +894,9 @@ IVAR_ACCESSOR_SHOULD_BE_MAIN_RACTOR(ID id)
   }
 
 static inline struct st_table *
-generic_ivtbl0(VALUE obj, bool check_ractor)
+generic_ivtbl(VALUE obj, ID id, bool force_check_ractor)
 {
-    if (check_ractor &&
+    if ((force_check_ractor || rb_is_instance_id(id)) && // not internal ID
         UNLIKELY(rb_ractor_shareable_p(obj) && !rb_ractor_main_p())) {
         rb_raise(rb_eRuntimeError, "can not access instance variables of shareable objects from non-main Ractors");
     }
@@ -904,33 +904,27 @@ generic_ivtbl0(VALUE obj, bool check_ractor)
 }
 
 static inline struct st_table *
-generic_ivtbl(VALUE obj)
+generic_ivtbl_no_ractor_check(VALUE obj)
 {
-    return generic_ivtbl0(obj, true);
+    return generic_ivtbl(obj, 0, false);
 }
 
 MJIT_FUNC_EXPORTED struct st_table *
 rb_ivar_generic_ivtbl(VALUE obj)
 {
-    return generic_ivtbl(obj);
+    return generic_ivtbl(obj, 0, true);
 }
 
 static int
-gen_ivtbl_get0(VALUE obj, struct gen_ivtbl **ivtbl, bool check_ractor)
+gen_ivtbl_get(VALUE obj, ID id, struct gen_ivtbl **ivtbl)
 {
     st_data_t data;
 
-    if (st_lookup(generic_ivtbl0(obj, check_ractor), (st_data_t)obj, &data)) {
+    if (st_lookup(generic_ivtbl(obj, id, false), (st_data_t)obj, &data)) {
 	*ivtbl = (struct gen_ivtbl *)data;
 	return 1;
     }
     return 0;
-}
-
-static int
-gen_ivtbl_get(VALUE obj, struct gen_ivtbl **ivtbl)
-{
-    return gen_ivtbl_get0(obj, ivtbl, true);
 }
 
 static VALUE
@@ -938,7 +932,7 @@ generic_ivar_delete(VALUE obj, ID id, VALUE undef)
 {
     struct gen_ivtbl *ivtbl;
 
-    if (gen_ivtbl_get(obj, &ivtbl)) {
+    if (gen_ivtbl_get(obj, id, &ivtbl)) {
 	st_table *iv_index_tbl = RCLASS_IV_INDEX_TBL(rb_obj_class(obj));
 	st_data_t index;
 
@@ -959,7 +953,7 @@ generic_ivar_get(VALUE obj, ID id, VALUE undef)
 {
     struct gen_ivtbl *ivtbl;
 
-    if (gen_ivtbl_get(obj, &ivtbl)) {
+    if (gen_ivtbl_get(obj, id, &ivtbl)) {
 	st_table *iv_index_tbl = RCLASS_IV_INDEX_TBL(rb_obj_class(obj));
 	st_data_t index;
 
@@ -1049,7 +1043,7 @@ generic_ivar_defined(VALUE obj, ID id)
 
     if (!iv_index_tbl) return Qfalse;
     if (!st_lookup(iv_index_tbl, (st_data_t)id, &index)) return Qfalse;
-    if (!gen_ivtbl_get(obj, &ivtbl)) return Qfalse;
+    if (!gen_ivtbl_get(obj, id, &ivtbl)) return Qfalse;
 
     if ((index < ivtbl->numiv) && (ivtbl->ivptr[index] != Qundef))
 	return Qtrue;
@@ -1067,7 +1061,7 @@ generic_ivar_remove(VALUE obj, ID id, VALUE *valp)
 
     if (!iv_index_tbl) return 0;
     if (!st_lookup(iv_index_tbl, key, &index)) return 0;
-    if (!gen_ivtbl_get(obj, &ivtbl)) return 0;
+    if (!gen_ivtbl_get(obj, id, &ivtbl)) return 0;
 
     if (index < ivtbl->numiv) {
 	if (ivtbl->ivptr[index] != Qundef) {
@@ -1094,7 +1088,7 @@ rb_mark_generic_ivar(VALUE obj)
 {
     struct gen_ivtbl *ivtbl;
 
-    if (gen_ivtbl_get0(obj, &ivtbl, false)) {
+    if (gen_ivtbl_get(obj, 0, &ivtbl)) {
 	gen_ivtbl_mark(ivtbl);
     }
 }
@@ -1105,8 +1099,8 @@ rb_mv_generic_ivar(VALUE rsrc, VALUE dst)
     st_data_t key = (st_data_t)rsrc;
     struct gen_ivtbl *ivtbl;
 
-    if (st_delete(generic_ivtbl(rsrc), &key, (st_data_t *)&ivtbl))
-        st_insert(generic_ivtbl(dst), (st_data_t)dst, (st_data_t)ivtbl);
+    if (st_delete(generic_ivtbl_no_ractor_check(rsrc), &key, (st_data_t *)&ivtbl))
+        st_insert(generic_ivtbl_no_ractor_check(dst), (st_data_t)dst, (st_data_t)ivtbl);
 }
 
 void
@@ -1115,7 +1109,7 @@ rb_free_generic_ivar(VALUE obj)
     st_data_t key = (st_data_t)obj;
     struct gen_ivtbl *ivtbl;
 
-    if (st_delete(generic_ivtbl(obj), &key, (st_data_t *)&ivtbl))
+    if (st_delete(generic_ivtbl_no_ractor_check(obj), &key, (st_data_t *)&ivtbl))
 	xfree(ivtbl);
 }
 
@@ -1124,7 +1118,7 @@ rb_generic_ivar_memsize(VALUE obj)
 {
     struct gen_ivtbl *ivtbl;
 
-    if (gen_ivtbl_get0(obj, &ivtbl, false))
+    if (gen_ivtbl_get(obj, 0, &ivtbl))
 	return gen_ivtbl_bytes(ivtbl->numiv);
     return 0;
 }
@@ -1281,7 +1275,7 @@ generic_ivar_set(VALUE obj, ID id, VALUE val)
     ivup.iv_extended = 0;
     ivup.u.iv_index_tbl = iv_index_tbl_make(obj);
     iv_index_tbl_extend(&ivup, id);
-    st_update(generic_ivtbl(obj), (st_data_t)obj, generic_ivar_update,
+    st_update(generic_ivtbl(obj, id, false), (st_data_t)obj, generic_ivar_update,
 	      (st_data_t)&ivup);
 
     ivup.u.ivtbl->ivptr[ivup.index] = val;
@@ -1529,7 +1523,7 @@ gen_ivar_each(VALUE obj, rb_ivar_foreach_callback_func *func, st_data_t arg)
     st_table *iv_index_tbl = RCLASS_IV_INDEX_TBL(rb_obj_class(obj));
 
     if (!iv_index_tbl) return;
-    if (!gen_ivtbl_get(obj, &data.ivtbl)) return;
+    if (!gen_ivtbl_get(obj, 0, &data.ivtbl)) return;
 
     data.func = (int (*)(ID key, VALUE val, st_data_t arg))func;
     data.arg = arg;
@@ -1573,14 +1567,14 @@ rb_copy_generic_ivar(VALUE clone, VALUE obj)
     if (!FL_TEST(obj, FL_EXIVAR)) {
         goto clear;
     }
-    if (gen_ivtbl_get(obj, &ivtbl)) {
+    if (gen_ivtbl_get(obj, 0, &ivtbl)) {
 	struct givar_copy c;
 	uint32_t i;
 
 	if (gen_ivtbl_count(ivtbl) == 0)
 	    goto clear;
 
-	if (gen_ivtbl_get(clone, &c.ivtbl)) {
+	if (gen_ivtbl_get(clone, 0, &c.ivtbl)) {
 	    for (i = 0; i < c.ivtbl->numiv; i++)
 		c.ivtbl->ivptr[i] = Qundef;
 	}
@@ -1596,8 +1590,8 @@ rb_copy_generic_ivar(VALUE clone, VALUE obj)
 	 * c.ivtbl may change in gen_ivar_copy due to realloc,
 	 * no need to free
 	 */
-        generic_ivtbl(clone);
-	st_insert(generic_ivtbl(obj), (st_data_t)clone, (st_data_t)c.ivtbl);
+        generic_ivtbl_no_ractor_check(clone);
+	st_insert(generic_ivtbl_no_ractor_check(obj), (st_data_t)clone, (st_data_t)c.ivtbl);
     }
     return;
 
@@ -1661,7 +1655,7 @@ rb_ivar_count(VALUE obj)
 	if (FL_TEST(obj, FL_EXIVAR)) {
 	    struct gen_ivtbl *ivtbl;
 
-	    if (gen_ivtbl_get(obj, &ivtbl)) {
+	    if (gen_ivtbl_get(obj, 0, &ivtbl)) {
 		return gen_ivtbl_count(ivtbl);
 	    }
 	}
