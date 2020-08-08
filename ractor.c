@@ -1752,10 +1752,9 @@ rb_ractor_shareable_p_continue(VALUE obj)
             goto shareable;
         }
         return false;
-
-      // TODO: need to cache the result or another cleverer way to avoid redundant check
       case T_ARRAY:
-        if (!RB_OBJ_FROZEN_RAW(obj) || FL_TEST_RAW(obj, RUBY_FL_EXIVAR)) {
+        if (!RB_OBJ_FROZEN_RAW(obj) ||
+            FL_TEST_RAW(obj, RUBY_FL_EXIVAR)) {
             return false;
         }
         else {
@@ -1765,8 +1764,11 @@ rb_ractor_shareable_p_continue(VALUE obj)
             goto shareable;
         }
       case T_HASH:
-        if (!RB_OBJ_FROZEN_RAW(obj)) return false;
-        {
+        if (!RB_OBJ_FROZEN_RAW(obj) ||
+            FL_TEST_RAW(obj, RUBY_FL_EXIVAR)) {
+            return false;
+        }
+        else {
             bool shareable = true;
             rb_hash_foreach(obj, rb_ractor_shareable_p_hash_i, (VALUE)&shareable);
             if (shareable) {
@@ -1776,7 +1778,6 @@ rb_ractor_shareable_p_continue(VALUE obj)
                 return false;
             }
         }
-
       default:
         return false;
     }
