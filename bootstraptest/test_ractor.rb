@@ -510,3 +510,4 @@ assert_equal 'nil', %q{
   end
   r.name.inspect
 }
+

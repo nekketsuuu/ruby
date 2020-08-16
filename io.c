@@ -8162,6 +8162,24 @@ prep_stdio(FILE *f, int fmode, VALUE klass, const char *path)
     return io;
 }
 
+VALUE
+rb_io_prep_stdin(void)
+{
+    return prep_stdio(stdin,  FMODE_READABLE, rb_cIO, "<STDIN>");
+}
+
+VALUE
+rb_io_prep_stdout(void)
+{
+    return prep_stdio(stdout, FMODE_WRITABLE|FMODE_SIGNAL_ON_EPIPE, rb_cIO, "<STDOUT>");
+}
+
+VALUE
+rb_io_prep_stderr(void)
+{
+    return prep_stdio(stderr, FMODE_WRITABLE|FMODE_SYNC, rb_cIO, "<STDERR>");
+}
+
 FILE *
 rb_io_stdio_file(rb_io_t *fptr)
 {
@@ -13549,9 +13567,9 @@ Init_IO(void)
     rb_gvar_ractor_local("$>");
     rb_gvar_ractor_local("$stderr");
 
-    rb_stdin  = prep_stdio(stdin,  FMODE_READABLE, rb_cIO, "<STDIN>");
-    rb_stdout = prep_stdio(stdout, FMODE_WRITABLE|FMODE_SIGNAL_ON_EPIPE, rb_cIO, "<STDOUT>");
-    rb_stderr = prep_stdio(stderr, FMODE_WRITABLE|FMODE_SYNC, rb_cIO, "<STDERR>");
+    rb_stdin  = rb_io_prep_stdin();
+    rb_stdout = rb_io_prep_stdout();
+    rb_stderr = rb_io_prep_stderr();
 
     rb_global_variable(&rb_stdin);
     rb_global_variable(&rb_stdout);
