@@ -8,6 +8,16 @@ assert_equal 'Ractor', %q{
   Ractor.new{}.class
 }
 
+# Ractor.new must call with a block
+assert_equal "must be called with a block", %q{
+  begin
+    Ractor.new
+  rescue ArgumentError => e
+    e.message
+  end
+}
+
+
 # A return value of a Ractor block will be a message from the Ractor.
 assert_equal 'ok', %q{
   # join
