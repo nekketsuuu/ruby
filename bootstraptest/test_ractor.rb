@@ -365,14 +365,17 @@ assert_equal 'can not access global variables $gv from non-main Ractors', %q{
   end
 }
 
-# $stdin,out,err is Ractor local variables and duped.
+# $stdin,out,err is Ractor local, but shared fds
 assert_equal 'ok', %q{
   r = Ractor.new do
-    [$stdin.fileno, $stdout.fileno, $stderr.fileno]
+    [$stdin, $stdout, $stderr].map{|io|
+      [io.object_id, io.fileno]
+    }
   end
 
-  [0, 1, 2].zip(r.take){|a, b|
-    raise if a == b
+  [$stdin, $stdout, $stderr].zip(r.take){|io, (oid, fno)|
+    raise "should not be different object" if io.object_id == oid
+    raise "fd should be same" unless io.fileno == fno
   }
   'ok'
 }
