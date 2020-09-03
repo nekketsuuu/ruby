@@ -3368,6 +3368,7 @@ cont.$(OBJEXT): {$(VPATH)}missing.h
 cont.$(OBJEXT): {$(VPATH)}mjit.h
 cont.$(OBJEXT): {$(VPATH)}node.h
 cont.$(OBJEXT): {$(VPATH)}ractor.h
+cont.$(OBJEXT): {$(VPATH)}ractor_pub.h
 cont.$(OBJEXT): {$(VPATH)}ruby_assert.h
 cont.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 cont.$(OBJEXT): {$(VPATH)}st.h
@@ -3561,6 +3562,7 @@ debug.$(OBJEXT): {$(VPATH)}node.h
 debug.$(OBJEXT): {$(VPATH)}onigmo.h
 debug.$(OBJEXT): {$(VPATH)}oniguruma.h
 debug.$(OBJEXT): {$(VPATH)}ractor.h
+debug.$(OBJEXT): {$(VPATH)}ractor_pub.h
 debug.$(OBJEXT): {$(VPATH)}ruby_assert.h
 debug.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 debug.$(OBJEXT): {$(VPATH)}st.h
@@ -5389,6 +5391,7 @@ eval.$(OBJEXT): {$(VPATH)}probes.dmyh
 eval.$(OBJEXT): {$(VPATH)}probes.h
 eval.$(OBJEXT): {$(VPATH)}probes_helper.h
 eval.$(OBJEXT): {$(VPATH)}ractor.h
+eval.$(OBJEXT): {$(VPATH)}ractor_pub.h
 eval.$(OBJEXT): {$(VPATH)}ruby_assert.h
 eval.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 eval.$(OBJEXT): {$(VPATH)}st.h
@@ -5810,6 +5813,7 @@ gc.$(OBJEXT): {$(VPATH)}oniguruma.h
 gc.$(OBJEXT): {$(VPATH)}probes.dmyh
 gc.$(OBJEXT): {$(VPATH)}probes.h
 gc.$(OBJEXT): {$(VPATH)}ractor.h
+gc.$(OBJEXT): {$(VPATH)}ractor_pub.h
 gc.$(OBJEXT): {$(VPATH)}re.h
 gc.$(OBJEXT): {$(VPATH)}regenc.h
 gc.$(OBJEXT): {$(VPATH)}regex.h
@@ -6728,6 +6732,7 @@ io.$(OBJEXT): {$(VPATH)}missing.h
 io.$(OBJEXT): {$(VPATH)}node.h
 io.$(OBJEXT): {$(VPATH)}onigmo.h
 io.$(OBJEXT): {$(VPATH)}oniguruma.h
+io.$(OBJEXT): {$(VPATH)}ractor_pub.h
 io.$(OBJEXT): {$(VPATH)}ruby_assert.h
 io.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 io.$(OBJEXT): {$(VPATH)}st.h
@@ -9573,6 +9578,7 @@ parse.$(OBJEXT): {$(VPATH)}parse.h
 parse.$(OBJEXT): {$(VPATH)}parse.y
 parse.$(OBJEXT): {$(VPATH)}probes.dmyh
 parse.$(OBJEXT): {$(VPATH)}probes.h
+parse.$(OBJEXT): {$(VPATH)}ractor_pub.h
 parse.$(OBJEXT): {$(VPATH)}regenc.h
 parse.$(OBJEXT): {$(VPATH)}regex.h
 parse.$(OBJEXT): {$(VPATH)}ruby_assert.h
@@ -9994,6 +10000,7 @@ process.$(OBJEXT): {$(VPATH)}node.h
 process.$(OBJEXT): {$(VPATH)}onigmo.h
 process.$(OBJEXT): {$(VPATH)}oniguruma.h
 process.$(OBJEXT): {$(VPATH)}process.c
+process.$(OBJEXT): {$(VPATH)}ractor_pub.h
 process.$(OBJEXT): {$(VPATH)}ruby_assert.h
 process.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 process.$(OBJEXT): {$(VPATH)}st.h
@@ -10020,6 +10027,15 @@ ractor.$(OBJEXT): $(top_srcdir)/internal/string.h
 ractor.$(OBJEXT): $(top_srcdir)/internal/vm.h
 ractor.$(OBJEXT): $(top_srcdir)/internal/warnings.h
 ractor.$(OBJEXT): {$(VPATH)}assert.h
+ractor.$(OBJEXT): {$(VPATH)}backward/2/assume.h
+ractor.$(OBJEXT): {$(VPATH)}backward/2/attributes.h
+ractor.$(OBJEXT): {$(VPATH)}backward/2/bool.h
+ractor.$(OBJEXT): {$(VPATH)}backward/2/gcc_version_since.h
+ractor.$(OBJEXT): {$(VPATH)}backward/2/inttypes.h
+ractor.$(OBJEXT): {$(VPATH)}backward/2/limits.h
+ractor.$(OBJEXT): {$(VPATH)}backward/2/long_long.h
+ractor.$(OBJEXT): {$(VPATH)}backward/2/stdalign.h
+ractor.$(OBJEXT): {$(VPATH)}backward/2/stdarg.h
 ractor.$(OBJEXT): {$(VPATH)}builtin.h
 ractor.$(OBJEXT): {$(VPATH)}config.h
 ractor.$(OBJEXT): {$(VPATH)}constant.h
@@ -10180,6 +10196,7 @@ ractor.$(OBJEXT): {$(VPATH)}ractor.c
 ractor.$(OBJEXT): {$(VPATH)}ractor.h
 ractor.$(OBJEXT): {$(VPATH)}ractor.rb
 ractor.$(OBJEXT): {$(VPATH)}ractor.rbinc
+ractor.$(OBJEXT): {$(VPATH)}ractor_pub.h
 ractor.$(OBJEXT): {$(VPATH)}ruby_assert.h
 ractor.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 ractor.$(OBJEXT): {$(VPATH)}st.h
@@ -13773,6 +13790,7 @@ thread.$(OBJEXT): {$(VPATH)}node.h
 thread.$(OBJEXT): {$(VPATH)}onigmo.h
 thread.$(OBJEXT): {$(VPATH)}oniguruma.h
 thread.$(OBJEXT): {$(VPATH)}ractor.h
+thread.$(OBJEXT): {$(VPATH)}ractor_pub.h
 thread.$(OBJEXT): {$(VPATH)}ruby_assert.h
 thread.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 thread.$(OBJEXT): {$(VPATH)}st.h
@@ -14695,6 +14713,7 @@ variable.$(OBJEXT): {$(VPATH)}node.h
 variable.$(OBJEXT): {$(VPATH)}onigmo.h
 variable.$(OBJEXT): {$(VPATH)}oniguruma.h
 variable.$(OBJEXT): {$(VPATH)}ractor.h
+variable.$(OBJEXT): {$(VPATH)}ractor_pub.h
 variable.$(OBJEXT): {$(VPATH)}ruby_assert.h
 variable.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 variable.$(OBJEXT): {$(VPATH)}st.h
@@ -15106,6 +15125,7 @@ vm.$(OBJEXT): {$(VPATH)}probes.dmyh
 vm.$(OBJEXT): {$(VPATH)}probes.h
 vm.$(OBJEXT): {$(VPATH)}probes_helper.h
 vm.$(OBJEXT): {$(VPATH)}ractor.h
+vm.$(OBJEXT): {$(VPATH)}ractor_pub.h
 vm.$(OBJEXT): {$(VPATH)}ruby_assert.h
 vm.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 vm.$(OBJEXT): {$(VPATH)}st.h
@@ -15497,6 +15517,7 @@ vm_dump.$(OBJEXT): {$(VPATH)}missing.h
 vm_dump.$(OBJEXT): {$(VPATH)}node.h
 vm_dump.$(OBJEXT): {$(VPATH)}procstat_vm.c
 vm_dump.$(OBJEXT): {$(VPATH)}ractor.h
+vm_dump.$(OBJEXT): {$(VPATH)}ractor_pub.h
 vm_dump.$(OBJEXT): {$(VPATH)}ruby_assert.h
 vm_dump.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 vm_dump.$(OBJEXT): {$(VPATH)}st.h
@@ -15522,6 +15543,15 @@ vm_sync.$(OBJEXT): $(top_srcdir)/internal/static_assert.h
 vm_sync.$(OBJEXT): $(top_srcdir)/internal/vm.h
 vm_sync.$(OBJEXT): {$(VPATH)}addr2line.h
 vm_sync.$(OBJEXT): {$(VPATH)}assert.h
+vm_sync.$(OBJEXT): {$(VPATH)}backward/2/assume.h
+vm_sync.$(OBJEXT): {$(VPATH)}backward/2/attributes.h
+vm_sync.$(OBJEXT): {$(VPATH)}backward/2/bool.h
+vm_sync.$(OBJEXT): {$(VPATH)}backward/2/gcc_version_since.h
+vm_sync.$(OBJEXT): {$(VPATH)}backward/2/inttypes.h
+vm_sync.$(OBJEXT): {$(VPATH)}backward/2/limits.h
+vm_sync.$(OBJEXT): {$(VPATH)}backward/2/long_long.h
+vm_sync.$(OBJEXT): {$(VPATH)}backward/2/stdalign.h
+vm_sync.$(OBJEXT): {$(VPATH)}backward/2/stdarg.h
 vm_sync.$(OBJEXT): {$(VPATH)}config.h
 vm_sync.$(OBJEXT): {$(VPATH)}constant.h
 vm_sync.$(OBJEXT): {$(VPATH)}defines.h
@@ -15682,6 +15712,7 @@ vm_sync.$(OBJEXT): {$(VPATH)}missing.h
 vm_sync.$(OBJEXT): {$(VPATH)}node.h
 vm_sync.$(OBJEXT): {$(VPATH)}procstat_vm.c
 vm_sync.$(OBJEXT): {$(VPATH)}ractor.h
+vm_sync.$(OBJEXT): {$(VPATH)}ractor_pub.h
 vm_sync.$(OBJEXT): {$(VPATH)}ruby_assert.h
 vm_sync.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 vm_sync.$(OBJEXT): {$(VPATH)}st.h
