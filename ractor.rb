@@ -162,4 +162,67 @@ class Ractor
     close_incoming
     close_outgoing
   end
+
+  ## RactorSpace
+
+  def self.[](key)
+    __builtin_cexpr! %q{
+      ractor_space_get(ec, key)
+    }
+  end
+
+  def self.[]=(key, value)
+    __builtin_cexpr! %q{
+      ractor_space_set(ec, key, value)
+    }
+  end
+
+  def self.atomically
+    if Primitive.ractor_space_tx_begin
+      # fast commit
+      begin
+        yield
+        Primitive.ractor_space_tx_commit
+      rescue Ractor::Space::Retry
+        Primitive.ractor_space_tx_reset
+        retry
+      end
+    else
+      yield
+    end
+  ensure
+    Primitive.ractor_space_tx_end
+  end
+
+  def self.lock *vars
+    Primitive.ractor_space_lock_begin(vars)
+    yield
+    Primitive.ractor_space_lock_commit
+  ensure
+    Primitive.ractor_space_lock_end
+  end
+
+  class Space
+    class TVar
+      def self.new init_value
+        Primitive.ractor_space_tvar_new init_value
+      end
+
+      def value
+        Primitive.ractor_space_tvar_value
+      end
+
+      def value=(val)
+        Primitive.ractor_space_tvar_value_set(val)
+      end
+
+      def increment inc = 1
+        Primitive.ractor_space_tvar_value_increment(inc)
+      end
+    end
+  end
+
+  def self.bp
+    __builtin_cexpr! '(bp(), 0)'
+  end
 end

@@ -16,6 +16,8 @@ static VALUE rb_eRactorMovedError;
 static VALUE rb_eRactorClosedError;
 static VALUE rb_cRactorMovedObject;
 
+#include "ractor_space.c"
+
 RUBY_SYMBOL_EXPORT_BEGIN
 // to share with MJIT
 bool ruby_multi_ractor;
@@ -1175,7 +1177,6 @@ ractor_close_outgoing(rb_execution_context_t *ec, rb_ractor_t *r)
 
         // wakeup all taking ractors
         rb_ractor_t *taking_ractor;
-        bp();
         while ((taking_ractor = ractor_waiting_list_shift(r, &r->taking_ractors)) != NULL) {
             rp(taking_ractor->self);
             RACTOR_LOCK(taking_ractor);
@@ -1771,6 +1772,8 @@ Init_Ractor(void)
     rb_define_method(rb_cRactorMovedObject, "instance_exec", ractor_moved_missing, -1);
 
     rb_obj_freeze(rb_cRactorMovedObject);
+
+    Init_ractor_space();
 }
 
 static int

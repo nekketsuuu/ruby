@@ -120,6 +120,8 @@ struct rb_ractor_struct {
 
     struct list_node vmlr_node;
 
+    // default Ractor::Space
+    struct ractor_space_tx *tx;
 
     VALUE r_stdin;
     VALUE r_stdout;

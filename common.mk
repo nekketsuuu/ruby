@@ -10364,6 +10364,7 @@ ractor.$(OBJEXT): {$(VPATH)}missing.h
 ractor.$(OBJEXT): {$(VPATH)}node.h
 ractor.$(OBJEXT): {$(VPATH)}onigmo.h
 ractor.$(OBJEXT): {$(VPATH)}oniguruma.h
+ractor.$(OBJEXT): {$(VPATH)}ractor_space.c
 ractor.$(OBJEXT): {$(VPATH)}ractor.c
 ractor.$(OBJEXT): {$(VPATH)}ractor.h
 ractor.$(OBJEXT): {$(VPATH)}ractor.rb
