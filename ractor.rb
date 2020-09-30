@@ -222,6 +222,35 @@ class Ractor
     end
   end
 
+  class Lock
+    def self.new
+      Primitive.ractor_lock_new
+    end
+    def synchronize
+      Primitive.ractor_lock_lock
+      yield
+    ensure
+      Primitive.ractor_lock_unlock
+    end
+    def own?
+      Primitive.ractor_lock_own_p
+    end
+  end
+
+  class LVar
+    def self.new var, lock
+      Primitive.ractor_lvar_new var, lock
+    end
+
+    def value
+      Primitive.ractor_lvar_value
+    end
+
+    def value=(obj)
+      Primitive.ractor_lvar_value_set obj
+    end
+  end
+
   def self.bp
     __builtin_cexpr! '(bp(), 0)'
   end

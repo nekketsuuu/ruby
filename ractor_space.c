@@ -42,6 +42,9 @@ static VALUE rb_eRactorSpaceRetry;
 static VALUE rb_eRactorSpaceTransactionError;
 static VALUE rb_cRactorSpaceTVar;
 
+static VALUE rb_cRactorLock;
+static VALUE rb_cRactorLVar;
+
 static uint32_t
 ractor_space_next_index(struct ractor_space *rs)
 {
@@ -524,6 +527,126 @@ ractor_space_tvar_value_increment(rb_execution_context_t *ec, VALUE self, VALUE 
     return v;
 }
 
+struct ractor_lock {
+    rb_nativethread_cond_t cond;
+    rb_nativethread_lock_t lock;
+    rb_thread_t *owner;
+};
+
+static const rb_data_type_t lock_data_type = {
+    "Ractor::Lock",
+    {NULL, RUBY_TYPED_DEFAULT_FREE, NULL,},
+    0, 0, RUBY_TYPED_FREE_IMMEDIATELY
+};
+
+static VALUE
+ractor_lock_new(rb_execution_context_t *ec, VALUE self)
+{
+    struct ractor_lock *lock;
+    VALUE obj = TypedData_Make_Struct(rb_cRactorLock, struct ractor_lock, &lock_data_type, lock);
+    rb_native_mutex_initialize(&lock->lock);
+    rb_native_cond_initialize(&lock->cond);
+    rb_obj_freeze(obj);
+    FL_SET_RAW(obj, RUBY_FL_SHAREABLE);
+    return obj;
+}
+
+struct lock_lock_data {
+    struct ractor_lock *lock;
+    rb_execution_context_t *ec;
+};
+
+static void *
+lock_lock(void *ptr)
+{
+    struct lock_lock_data *data = (struct lock_lock_data *)ptr;
+    struct ractor_lock *lock = data->lock;
+
+    rb_native_mutex_lock(&lock->lock);
+    {
+        while (lock->owner != NULL) {
+            rb_native_cond_wait(&lock->cond, &lock->lock);
+        }
+        lock->owner = rb_ec_thread_ptr(data->ec);
+    }
+    rb_native_mutex_unlock(&lock->lock);
+
+    return NULL;
+}
+
+static VALUE
+ractor_lock_lock(rb_execution_context_t *ec, VALUE self)
+{
+    struct ractor_lock *lock = DATA_PTR(self);
+    struct lock_lock_data data = {
+        lock, ec
+    };
+    rb_thread_call_without_gvl(lock_lock, &data, NULL, NULL);
+    return Qfalse;
+}
+
+static VALUE
+ractor_lock_unlock(rb_execution_context_t *ec, VALUE self)
+{
+    struct ractor_lock *lock = DATA_PTR(self);
+    lock->owner = NULL;
+    rb_native_cond_signal(&lock->cond);
+    return Qfalse;
+}
+
+static VALUE
+ractor_lock_own_p(rb_execution_context_t *ec, VALUE self)
+{
+    struct ractor_lock *lock = DATA_PTR(self);
+    return lock->owner == rb_ec_thread_ptr(ec) ? Qtrue : Qfalse;
+}
+
+struct ractor_lvar {
+    VALUE lock;
+    VALUE value;
+};
+
+static const rb_data_type_t lvar_data_type = {
+    "Ractor::LVar",
+    {NULL, RUBY_TYPED_DEFAULT_FREE, NULL,},
+    0, 0, RUBY_TYPED_FREE_IMMEDIATELY
+};
+
+static VALUE
+ractor_lvar_new(rb_execution_context_t *ec, VALUE self, VALUE init, VALUE lock)
+{
+    struct ractor_lvar *lvar;
+    VALUE obj = TypedData_Make_Struct(rb_cRactorLVar, struct ractor_lvar, &lvar_data_type, lvar);
+    lvar->lock = lock;
+    lvar->value = init;
+    rb_obj_freeze(obj);
+    FL_SET_RAW(obj, RUBY_FL_SHAREABLE);
+    return obj;
+}
+
+static VALUE
+ractor_lvar_value(rb_execution_context_t *ec, VALUE self)
+{
+    struct ractor_lvar *lvar = DATA_PTR(self);
+    if (UNLIKELY(!ractor_lock_own_p(ec, lvar->lock))) {
+        rb_raise(rb_eRactorError, "corresponding lock is not acquired");
+    }
+    return lvar->value;
+}
+
+static VALUE
+ractor_lvar_value_set(rb_execution_context_t *ec, VALUE self, VALUE val)
+{
+    struct ractor_lvar *lvar = DATA_PTR(self);
+    if (UNLIKELY(!ractor_lock_own_p(ec, lvar->lock))) {
+        rb_raise(rb_eRactorError, "corresponding lock is not acquired");
+    }
+    if (UNLIKELY(!rb_ractor_shareable_p(val))) {
+        rb_raise(rb_eRactorError, "only shareable object are allowed");
+    }
+    return lvar->value = val;
+}
+
 static void
 Init_ractor_space(void)
 {
@@ -538,5 +661,6 @@ Init_ractor_space(void)
     rb_eRactorSpaceRetry = rb_define_class_under(rb_cRactorSpace, "Retry", rb_eException);
 
     rb_cRactorSpaceTVar = rb_define_class_under(rb_cRactorSpace, "TVar", rb_cObject);
+    rb_cRactorLock = rb_define_class_under(rb_cRactor, "Lock", rb_cObject);
+    rb_cRactorLVar = rb_define_class_under(rb_cRactor, "LVar", rb_cObject);
 }
-
