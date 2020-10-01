@@ -2,11 +2,16 @@
 
 // included by ractor.c
 
+#define RS_DEBUG 0
+
 struct rs_slot {
     uint64_t version;
     VALUE value;
     VALUE name;
-    rb_nativethread_lock_t lock;
+    rb_nativethread_lock_t lock_;
+#if RS_DEBUG
+    int lock_location;
+#endif
 };
 
 #define RS_PAGE_SLOTS  512
@@ -73,7 +78,7 @@ ractor_space_new_page(void)
         slot->version = 0;
         slot->value = Qnil;
         slot->name = Qnil;
-        rb_native_mutex_initialize(&slot->lock);
+        rb_native_mutex_initialize(&slot->lock_);
     }
     return slots;
 }
@@ -132,6 +137,29 @@ ractor_space_new_version(struct ractor_space *rs)
 {
     return rs->version + 1;
 }
+
+static void
+rs_slot_lock_(struct rs_slot *slot, int line)
+{
+    rb_native_mutex_lock(&slot->lock_);
+
+#if RS_DEBUG
+    slot->lock_location = line;
+#endif
+}
+
+static void
+rs_slot_unlock_(struct rs_slot *slot, int line)
+{
+#if RS_DEBUG
+    slot->lock_location = 0;
+#endif
+
+    rb_native_mutex_unlock(&slot->lock_);
+}
+
+#define rs_slot_lock(slot) rs_slot_lock_(slot, __LINE__)
+#define rs_slot_unlock(slot) rs_slot_unlock_(slot, __LINE__)
 
 // tx: transaction
 
@@ -287,13 +315,14 @@ ractor_space_tx_commit(rb_execution_context_t *ec, VALUE self)
         struct rstx_slot *copy = &tx->copies[i];
         struct rs_slot *slot = copy->slot;
 
-        rb_native_mutex_lock(&slot->lock);
+        rs_slot_lock(slot);
         if (slot->version > tx->version) {
             // retry
             for (j=0; j<=i; j++) {
-                struct rstx_slot *copy = &tx->copies[i];
+                struct rstx_slot *copy = &tx->copies[j];
                 struct rs_slot *slot = copy->slot;
-                rb_native_mutex_unlock(&slot->lock);
+                rs_slot_unlock(slot);
+                
             }
             // fprintf(stderr, "i:%d slot:%d tx:%d v:%d\n", (int)i, (int)slot->version, (int)tx->version, (int)FIX2INT(copy->value));
             rb_raise(rb_eRactorSpaceRetry, "commit is not success."); // TODO
@@ -317,7 +346,7 @@ ractor_space_tx_commit(rb_execution_context_t *ec, VALUE self)
     for (i=0; i<tx->copy_cnt; i++) {
         struct rstx_slot *copy = &tx->copies[i];
         struct rs_slot *slot = copy->slot;
-        rb_native_mutex_unlock(&slot->lock);
+        rs_slot_unlock(slot);
     }
 
     return Qnil;
@@ -344,7 +373,7 @@ static void *
 slot_lock(void *ptr)
 {
     struct rs_slot *slot = (struct rs_slot *)ptr;
-    rb_native_mutex_lock(&slot->lock);
+    rs_slot_lock(slot);
     return NULL;
 }
 
@@ -412,7 +441,7 @@ ractor_space_lock_end(rb_execution_context_t *ec, VALUE self)
 
     // release lock
     for (uint32_t i=0; i<tx->copy_cnt; i++) {
-        rb_native_mutex_unlock(&tx->copies[i].slot->lock);
+        rs_slot_unlock(tx->copies[i].slot);
     }
 
     tx->nesting = 0;
@@ -484,10 +513,12 @@ static VALUE
 ractor_space_calc_inc(VALUE v, VALUE inc)
 {
     if (LIKELY(FIXNUM_P(v) && FIXNUM_P(inc))) {
-        return rb_fix_plus_fix(v, inc);
+        VALUE r = rb_fix_plus_fix(v, inc);
+        return r;
     }
     else {
-        return rb_funcall(v, rb_intern("+"), inc);
+        rb_bug("unsupported");
+        // return rb_funcall(v, rb_intern("+"), inc);
     }
 }
 
@@ -503,19 +534,21 @@ ractor_space_tvar_value_increment(rb_execution_context_t *ec, VALUE self, VALUE 
     if (tx->nesting == 0) {
         uint32_t index = FIX2INT(key);
         struct rs_slot *slot = ractor_space_index_ref(rs, index);
-        rb_native_mutex_lock(&slot->lock);
+        rs_slot_lock(slot);
         {
             uint64_t new_version = ractor_space_new_version(rs);
             v = slot->value;
+
             // TODO: should be fixnum
             v = ractor_space_calc_inc(v, inc);
+
             slot->value = v;
             slot->version = new_version;
 
             // TODO: memory reorder?
             rs->version = new_version;
         }
-        rb_native_mutex_unlock(&slot->lock);
+        rs_slot_unlock(slot);
     }
     else {
         // Ractor[key] += inc
@@ -531,11 +564,24 @@ struct ractor_lock {
     rb_nativethread_cond_t cond;
     rb_nativethread_lock_t lock;
     rb_thread_t *owner;
+
+    int ok, ng;
 };
+
+#if 0
+static void
+ractor_lock_free(void *ptr)
+{
+    struct ractor_lock *lock = (struct ractor_lock *)ptr;
+    fprintf(stderr, "ok:%d ng:%d\n", lock->ok, lock->ng);
+}
+#else
+#define ractor_lock_free RUBY_TYPED_DEFAULT_FREE
+#endif
 
 static const rb_data_type_t lock_data_type = {
     "Ractor::Lock",
-    {NULL, RUBY_TYPED_DEFAULT_FREE, NULL,},
+    {NULL, ractor_lock_free, NULL,},
     0, 0, RUBY_TYPED_FREE_IMMEDIATELY
 };
 
@@ -548,6 +594,8 @@ ractor_lock_new(rb_execution_context_t *ec, VALUE self)
     rb_native_cond_initialize(&lock->cond);
     rb_obj_freeze(obj);
     FL_SET_RAW(obj, RUBY_FL_SHAREABLE);
+
+    lock->ok = lock->ng = 0;
     return obj;
 }
 
@@ -566,6 +614,13 @@ lock_lock(void *ptr)
     {
         while (lock->owner != NULL) {
             rb_native_cond_wait(&lock->cond, &lock->lock);
+
+            if (lock->owner != NULL) {
+                lock->ok++;
+            }
+            else {
+                lock->ng++;
+            }
         }
         lock->owner = rb_ec_thread_ptr(data->ec);
     }
@@ -589,8 +644,12 @@ static VALUE
 ractor_lock_unlock(rb_execution_context_t *ec, VALUE self)
 {
     struct ractor_lock *lock = DATA_PTR(self);
+
+    rb_native_mutex_lock(&lock->lock);
     lock->owner = NULL;
     rb_native_cond_signal(&lock->cond);
+    rb_native_mutex_unlock(&lock->lock);
+
     return Qfalse;
 }
 
