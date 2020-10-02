@@ -163,27 +163,28 @@ class Ractor
     close_outgoing
   end
 
-  ## RactorSpace
+  ## Shared values
 
-  def self.[](key)
-    __builtin_cexpr! %q{
-      ractor_space_get(ec, key)
-    }
-  end
+  class Space
+    def self.[](key)
+      __builtin_cexpr! %q{
+        ractor_space_get(ec, key)
+      }
+    end
 
-  def self.[]=(key, value)
-    __builtin_cexpr! %q{
-      ractor_space_set(ec, key, value)
-    }
+    def self.[]=(key, value)
+      __builtin_cexpr! %q{
+        ractor_space_set(ec, key, value)
+      }
+    end
   end
 
   def self.atomically
     if Primitive.ractor_space_tx_begin
       # fast commit
       begin
-        yield
-        Primitive.ractor_space_tx_commit
-      rescue Ractor::Space::Retry
+        Primitive.ractor_space_tx_commit yield
+      rescue Ractor::RetryTransaction
         Primitive.ractor_space_tx_reset
         retry
       end
@@ -202,23 +203,27 @@ class Ractor
     Primitive.ractor_space_lock_end
   end
 
-  class Space
-    class TVar
-      def self.new init_value
-        Primitive.ractor_space_tvar_new init_value
-      end
+  class TVar
+    def self.new init_value
+      Primitive.ractor_space_tvar_new init_value
+    end
 
-      def value
-        Primitive.ractor_space_tvar_value
-      end
+    def value
+      Primitive.ractor_space_tvar_value
+    end
 
-      def value=(val)
-        Primitive.ractor_space_tvar_value_set(val)
-      end
+    def value=(val)
+      Primitive.ractor_space_tvar_value_set(val)
+    end
 
-      def increment inc = 1
-        Primitive.ractor_space_tvar_value_increment(inc)
-      end
+    def increment inc = 1
+      Primitive.ractor_space_tvar_value_increment(inc)
+    end
+
+    def inspect
+      index = Primitive.cexpr! %q{ tvar_slot_ptr(self)->index }
+      value = Primitive.cexpr! %q{ tvar_slot_ptr(self)->value }
+      "<TVar #{index} value:#{value}>"
     end
   end
 

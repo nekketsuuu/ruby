@@ -1,35 +1,34 @@
 #include "internal/fixnum.h"
+#include "ruby/util.h"
 
 // included by ractor.c
 
 #define RS_DEBUG 0
 
-struct rs_slot {
+struct tvar_slot {
     uint64_t version;
     VALUE value;
-    VALUE name;
+    VALUE index;
     rb_nativethread_lock_t lock_;
 #if RS_DEBUG
     int lock_location;
 #endif
 };
 
-#define RS_PAGE_SLOTS  512
-#define RS_MAX_PAGES  1024
-#define RS_MAX_SLOTS  (RS_MAX_PAGES * RS_PAGE_SLOTS)
-
 struct ractor_space {
-    uint32_t slot_cnt;
-    struct rs_slot *pages[RS_MAX_PAGES];
     uint64_t version;
-    rb_nativethread_lock_t slots_lock;
+
+    uint64_t slot_index;
+    rb_nativethread_lock_t slot_index_lock;
+
+    // protected by vm_lock
+    VALUE tvar_map;
 };
 
 struct rstx_slot {
-    VALUE key;
     VALUE value;
-    struct rs_slot *slot;
-    uint32_t index;
+    struct tvar_slot *slot;
+    VALUE tvar; // mark slot
 };
 
 struct ractor_space_tx {
@@ -42,81 +41,25 @@ struct ractor_space_tx {
 };
 
 static struct ractor_space ractor_space;
-static VALUE rb_eRactorSpaceError;
-static VALUE rb_eRactorSpaceRetry;
-static VALUE rb_eRactorSpaceTransactionError;
-static VALUE rb_cRactorSpaceTVar;
+static VALUE rb_eRactorTxRetry;
+static VALUE rb_eRactorTxError;
+static VALUE rb_exc_tx_retry;
+static VALUE rb_cRactorTVar;
 
 static VALUE rb_cRactorLock;
 static VALUE rb_cRactorLVar;
 
-static uint32_t
+static VALUE
 ractor_space_next_index(struct ractor_space *rs)
 {
-    uint32_t index;
-    rb_native_mutex_lock(&rs->slots_lock);
+    VALUE index;
+    rb_native_mutex_lock(&rs->slot_index_lock);
     {
-        index = rs->slot_cnt++;
+        rs->slot_index++;
+        index = INT2FIX(rs->slot_index);
     }
-    rb_native_mutex_unlock(&rs->slots_lock);
+    rb_native_mutex_unlock(&rs->slot_index_lock);
 
-    return index;
-}
-
-static uint32_t
-ractor_space_name2index(struct ractor_space *rs, VALUE key)
-{
-    rb_bug("TODO: fix later");
-}
-
-static struct rs_slot *
-ractor_space_new_page(void)
-{
-    struct rs_slot *slots = ALLOC_N(struct rs_slot, RS_PAGE_SLOTS);
-    for (int i=0; i<RS_PAGE_SLOTS; i++) {
-        struct rs_slot *slot = &slots[i];
-        slot->version = 0;
-        slot->value = Qnil;
-        slot->name = Qnil;
-        rb_native_mutex_initialize(&slot->lock_);
-    }
-    return slots;
-}
-
-static struct rs_slot *
-ractor_space_index_ref(struct ractor_space *rs, uint32_t index)
-{
-    return &rs->pages[index/RS_PAGE_SLOTS][index%RS_PAGE_SLOTS];
-}
-
-static void
-ractor_space_prepare_slot(struct ractor_space *rs, uint32_t index)
-{
-    if (UNLIKELY(index >= RS_MAX_SLOTS)) {
-        rb_raise(rb_eRactorSpaceError, "can not make TVars more");
-    }
-
-    if (rs->pages[index / RS_PAGE_SLOTS] == NULL) {
-        rb_native_mutex_lock(&rs->slots_lock);
-        if (rs->pages[index / RS_PAGE_SLOTS] == NULL) {
-            rs->pages[index / RS_PAGE_SLOTS] = ractor_space_new_page();
-        }
-        rb_native_mutex_unlock(&rs->slots_lock);
-    }
-}
-
-static uint32_t
-ractor_space_index(struct ractor_space *rs, VALUE key)
-{
-    uint32_t index;
-
-    if (FIXNUM_P(key)) {
-        index =  FIX2UINT(key);
-    }
-    else {
-        index = ractor_space_name2index(rs, key);
-    }
-    ractor_space_prepare_slot(rs, index);
     return index;
 }
 
@@ -139,7 +82,7 @@ ractor_space_new_version(struct ractor_space *rs)
 }
 
 static void
-rs_slot_lock_(struct rs_slot *slot, int line)
+rs_slot_lock_(struct tvar_slot *slot, int line)
 {
     rb_native_mutex_lock(&slot->lock_);
 
@@ -149,7 +92,7 @@ rs_slot_lock_(struct rs_slot *slot, int line)
 }
 
 static void
-rs_slot_unlock_(struct rs_slot *slot, int line)
+rs_slot_unlock_(struct tvar_slot *slot, int line)
 {
 #if RS_DEBUG
     slot->lock_location = 0;
@@ -179,13 +122,13 @@ ractor_space_tx(rb_ractor_t *cr)
 }
 
 struct rstx_slot *
-ractor_space_tx_lookup(struct ractor_space_tx *tx, VALUE key)
+ractor_space_tx_lookup(struct ractor_space_tx *tx, VALUE tvar)
 {
     struct rstx_slot *copies = tx->copies;
     uint32_t cnt = tx->copy_cnt;
 
     for (uint32_t i = 0; i< cnt; i++) {
-        if (copies[i].key == key) {
+        if (copies[i].tvar == tvar) {
             return &copies[i];
         }
     }
@@ -194,32 +137,31 @@ ractor_space_tx_lookup(struct ractor_space_tx *tx, VALUE key)
 }
 
 static void
-ractor_space_tx_add(struct ractor_space_tx *tx, VALUE key, VALUE val, uint32_t index, struct rs_slot *slot)
+ractor_space_tx_add(struct ractor_space_tx *tx, VALUE val, struct tvar_slot *slot, VALUE tvar)
 {
-    if (tx->copy_capa == tx->copy_cnt) {
-        rb_bug("TODO");
+    if (UNLIKELY(tx->copy_capa == tx->copy_cnt)) {
+        uint32_t new_capa =  tx->copy_capa * 2;
+        SIZED_REALLOC_N(tx->copies, struct rstx_slot, new_capa, tx->copy_capa);
+        tx->copy_capa = new_capa;
     }
-    if (tx->stop_adding) {
-        rb_raise(rb_eRactorSpaceTransactionError, "can not handle more transactional variable: %"PRIxVALUE, rb_inspect(key));
+    if (UNLIKELY(tx->stop_adding)) {
+        rb_raise(rb_eRactorTxError, "can not handle more transactional variable: %"PRIxVALUE, rb_inspect(tvar));
     }
     struct rstx_slot *ent = &tx->copies[tx->copy_cnt++];
 
-    ent->key = key;
     ent->value = val;
-    ent->index = index;
     ent->slot = slot;
+    ent->tvar = tvar;
 }
 
 static VALUE
-ractor_space_tx_get(struct ractor_space *rs, struct ractor_space_tx *tx, VALUE key)
+ractor_space_tx_get(struct ractor_space_tx *tx, struct tvar_slot *slot, VALUE tvar)
 {
-    struct rstx_slot *ent = ractor_space_tx_lookup(tx, key);
+    struct rstx_slot *ent = ractor_space_tx_lookup(tx, tvar);
 
     if (ent == NULL) {
-        uint32_t index = ractor_space_index(rs, key);
-        struct rs_slot *slot = ractor_space_index_ref(rs, index);
         VALUE val = slot->value;
-        ractor_space_tx_add(tx, key, val, index, slot);
+        ractor_space_tx_add(tx, val, slot, tvar);
         return val;
     }
     else {
@@ -228,14 +170,12 @@ ractor_space_tx_get(struct ractor_space *rs, struct ractor_space_tx *tx, VALUE k
 }
 
 static void
-ractor_space_tx_set(struct ractor_space *rs, struct ractor_space_tx *tx, VALUE key, VALUE val)
+ractor_space_tx_set(struct ractor_space_tx *tx, VALUE val, struct tvar_slot *slot, VALUE tvar)
 {
-    struct rstx_slot *ent = ractor_space_tx_lookup(tx, key);
+    struct rstx_slot *ent = ractor_space_tx_lookup(tx, tvar);
 
     if (ent == NULL) {
-        uint32_t index = ractor_space_index(rs, key);
-        struct rs_slot *slot = ractor_space_index_ref(rs, index);
-        ractor_space_tx_add(tx, key, val, index, slot);
+        ractor_space_tx_add(tx, val, slot, tvar);
     }
     else {
         ent->value = val;
@@ -245,8 +185,8 @@ ractor_space_tx_set(struct ractor_space *rs, struct ractor_space_tx *tx, VALUE k
 static void
 ractor_space_tx_check(struct ractor_space_tx *tx)
 {
-    if (tx->nesting == 0) {
-        rb_raise(rb_eRactorSpaceTransactionError, "can not set without transaction");
+    if (UNLIKELY(tx->nesting == 0)) {
+        rb_raise(rb_eRactorTxError, "can not set without transaction");
     }
 }
 
@@ -295,14 +235,32 @@ ractor_space_tx_end(rb_execution_context_t *ec, VALUE self)
     return Qnil;
 }
 
+static int
+rstx_slot_cmp(const void *p1, const void *p2, void *dmy)
+{
+    const struct rstx_slot *s1 = (struct rstx_slot *)p1;
+    const struct rstx_slot *s2 = (struct rstx_slot *)p2;
+    VALUE i1 = s1->slot->index;
+    VALUE i2 = s2->slot->index;
+
+    return i1 < i2 ? 1 : i1 > i2 ? -1 : 0;
+}
+
 static void
 ractor_space_tx_sort(struct ractor_space_tx *tx)
 {
-    // TODO
+    switch (tx->copy_cnt) {
+      case 0:
+      case 1:
+        break;
+      default:
+        ruby_qsort(tx->copies, tx->copy_cnt, sizeof(struct rstx_slot), rstx_slot_cmp, NULL);
+        break;
+    }
 }
 
 static VALUE
-ractor_space_tx_commit(rb_execution_context_t *ec, VALUE self)
+ractor_space_tx_commit(rb_execution_context_t *ec, VALUE self, VALUE ret)
 {
     rb_ractor_t *cr = rb_ec_ractor_ptr(ec);
     struct ractor_space *rs = rb_ractor_space(ec);
@@ -313,19 +271,18 @@ ractor_space_tx_commit(rb_execution_context_t *ec, VALUE self)
 
     for (i=0; i<tx->copy_cnt; i++) {
         struct rstx_slot *copy = &tx->copies[i];
-        struct rs_slot *slot = copy->slot;
+        struct tvar_slot *slot = copy->slot;
 
         rs_slot_lock(slot);
         if (slot->version > tx->version) {
             // retry
             for (j=0; j<=i; j++) {
                 struct rstx_slot *copy = &tx->copies[j];
-                struct rs_slot *slot = copy->slot;
+                struct tvar_slot *slot = copy->slot;
                 rs_slot_unlock(slot);
-                
             }
-            // fprintf(stderr, "i:%d slot:%d tx:%d v:%d\n", (int)i, (int)slot->version, (int)tx->version, (int)FIX2INT(copy->value));
-            rb_raise(rb_eRactorSpaceRetry, "commit is not success."); // TODO
+
+            rb_exc_raise(rb_exc_tx_retry);
         }
     }
 
@@ -333,7 +290,7 @@ ractor_space_tx_commit(rb_execution_context_t *ec, VALUE self)
 
     for (i=0; i<tx->copy_cnt; i++) {
         struct rstx_slot *copy = &tx->copies[i];
-        struct rs_slot *slot = copy->slot;
+        struct tvar_slot *slot = copy->slot;
 
         if (slot->value != copy->value) {
             slot->version = new_version;
@@ -345,109 +302,11 @@ ractor_space_tx_commit(rb_execution_context_t *ec, VALUE self)
 
     for (i=0; i<tx->copy_cnt; i++) {
         struct rstx_slot *copy = &tx->copies[i];
-        struct rs_slot *slot = copy->slot;
+        struct tvar_slot *slot = copy->slot;
         rs_slot_unlock(slot);
     }
 
-    return Qnil;
-}
-
-// pessimistic lock
-
-static VALUE
-tvar2key(VALUE tvar)
-{
-    if (FIXNUM_P(tvar)) {
-        return tvar;
-    }
-    if (SYMBOL_P(tvar)) {
-        return tvar;
-    }
-    if (rb_obj_is_kind_of(tvar, rb_cRactorSpaceTVar)) {
-        return rb_ivar_get(tvar, rb_intern("index"));
-    }
-    rb_raise(rb_eRactorSpaceError, "not a tvar");
-}
-
-static void *
-slot_lock(void *ptr)
-{
-    struct rs_slot *slot = (struct rs_slot *)ptr;
-    rs_slot_lock(slot);
-    return NULL;
-}
-
-static VALUE
-ractor_space_lock_begin(rb_execution_context_t *ec, VALUE self, VALUE tvars)
-{
-    rb_ractor_t *cr = rb_ec_ractor_ptr(ec);
-    struct ractor_space *rs = rb_ractor_space(ec);
-    struct ractor_space_tx *tx = ractor_space_tx(cr);
-    int i;
-
-    if (tx->nesting > 0) {
-        rb_raise(rb_eRactorSpaceTransactionError, "can not nest lock");
-    }
-
-    tx->nesting = 1;
-
-    int len = RARRAY_LENINT(tvars);
-    for (i=0; i<len; i++) {
-        VALUE tvar = RARRAY_AREF(tvars, i);
-        VALUE key = tvar2key(tvar);
-        uint32_t index = ractor_space_index(rs, key);
-        struct rs_slot *slot = ractor_space_index_ref(rs, index);
-        rb_thread_call_without_gvl(slot_lock, slot, NULL, NULL);
-        ractor_space_tx_add(tx, key, slot->value, index, slot);
-    }
-
-    tx->stop_adding = true;
-
-    return Qtrue;
-}
-
-static VALUE
-ractor_space_lock_commit(rb_execution_context_t *ec, VALUE self)
-{
-    rb_ractor_t *cr = rb_ec_ractor_ptr(ec);
-    struct ractor_space *rs = rb_ractor_space(ec);
-    struct ractor_space_tx *tx = ractor_space_tx(cr);
-
-    ractor_space_tx_sort(tx);
-
-    uint64_t new_version = ractor_space_new_version(rs);
-
-    for (uint32_t i=0; i<tx->copy_cnt; i++) {
-        struct rstx_slot *copy = &tx->copies[i];
-        struct rs_slot *slot = copy->slot;
-
-        if (slot->value != copy->value) {
-            slot->version = new_version;
-            slot->value = copy->value;
-        }
-    }
-
-    rs->version = new_version;
-
-    return Qnil;
-}
-
-static VALUE
-ractor_space_lock_end(rb_execution_context_t *ec, VALUE self)
-{
-    rb_ractor_t *cr = rb_ec_ractor_ptr(ec);
-    struct ractor_space_tx *tx = ractor_space_tx(cr);
-    VM_ASSERT(tx->nesting > 0);
-
-    // release lock
-    for (uint32_t i=0; i<tx->copy_cnt; i++) {
-        rs_slot_unlock(tx->copies[i].slot);
-    }
-
-    tx->nesting = 0;
-    tx->copy_cnt = 0;
-    tx->stop_adding = false;
-    return Qnil;
+    return ret;
 }
 
 // ruby-level API
@@ -455,58 +314,65 @@ ractor_space_lock_end(rb_execution_context_t *ec, VALUE self)
 static VALUE
 ractor_space_get(rb_execution_context_t *ec, VALUE key)
 {
-    rb_ractor_t *cr = rb_ec_ractor_ptr(ec);
-    struct ractor_space *rs = rb_ractor_space(ec);
-    struct ractor_space_tx *tx = ractor_space_tx(cr);
-    ractor_space_tx_check(tx);
-    return ractor_space_tx_get(rs, tx, key);
+    rb_bug("TODO");
 }
 
 static VALUE
 ractor_space_set(rb_execution_context_t *ec, VALUE key, VALUE val)
 {
-    rb_ractor_t *cr = rb_ec_ractor_ptr(ec);
-    struct ractor_space *rs = rb_ractor_space(ec);
-    struct ractor_space_tx *tx = ractor_space_tx(cr);
-
-    ractor_space_tx_check(tx);
-
-    if (!rb_ractor_shareable_p(val)) {
-        rb_raise(rb_eRactorSpaceError, "can not set an unshareable value");
-    }
-
-    ractor_space_tx_set(rs, tx, key, val);
-    return Qnil;
+    rb_bug("TODO");
 }
+
+static void
+ractor_tvar_mark(void *ptr)
+{
+    struct tvar_slot *slot = (struct tvar_slot *)ptr;
+    rb_gc_mark(slot->value);
+}
+
+static const rb_data_type_t tvar_data_type = {
+    "Ractor::TVar",
+    {ractor_tvar_mark, RUBY_TYPED_DEFAULT_FREE, NULL,},
+    0, 0, RUBY_TYPED_FREE_IMMEDIATELY
+};
 
 static VALUE
 ractor_space_tvar_new(rb_execution_context_t *ec, VALUE self, VALUE init)
 {
-    VALUE obj = rb_obj_alloc(rb_cRactorSpaceTVar);
     struct ractor_space *rs = rb_ractor_space(ec);
-    uint32_t index = ractor_space_next_index(rs);
-    VALUE vi = INT2FIX(index);
-    ractor_space_prepare_slot(rs, index);
-    struct rs_slot *slot = ractor_space_index_ref(rs, index);
-    rb_ivar_set(obj, rb_intern("index"), vi);
+    struct tvar_slot *slot;
+
+    VALUE obj = TypedData_Make_Struct(rb_cRactorTVar, struct tvar_slot, &tvar_data_type, slot);
+    slot->version = 0;
     slot->value = init;
+    slot->index = ractor_space_next_index(rs);
+    rb_native_mutex_initialize(&slot->lock_);
+
     rb_obj_freeze(obj);
     FL_SET_RAW(obj, RUBY_FL_SHAREABLE);
+
     return obj;
 }
 
 static VALUE
 ractor_space_tvar_value(rb_execution_context_t *ec, VALUE self)
 {
-    VALUE key = rb_ivar_get(self, rb_intern("index"));
-    return ractor_space_get(ec, key);
+    rb_ractor_t *cr = rb_ec_ractor_ptr(ec);
+    struct ractor_space_tx *tx = ractor_space_tx(cr);
+    ractor_space_tx_check(tx);
+    struct tvar_slot *slot = DATA_PTR(self);
+    return ractor_space_tx_get(tx, slot, self);
 }
 
 static VALUE
 ractor_space_tvar_value_set(rb_execution_context_t *ec, VALUE self, VALUE val)
 {
-    VALUE key = rb_ivar_get(self, rb_intern("index"));
-    return ractor_space_set(ec, key, val);
+    rb_ractor_t *cr = rb_ec_ractor_ptr(ec);
+    struct ractor_space_tx *tx = ractor_space_tx(cr);
+    ractor_space_tx_check(tx);
+    struct tvar_slot *slot = DATA_PTR(self);
+    ractor_space_tx_set(tx, val, slot, self);
+    return val;
 }
 
 static VALUE
@@ -528,12 +394,10 @@ ractor_space_tvar_value_increment(rb_execution_context_t *ec, VALUE self, VALUE 
     rb_ractor_t *cr = rb_ec_ractor_ptr(ec);
     struct ractor_space *rs = rb_ractor_space(ec);
     struct ractor_space_tx *tx = ractor_space_tx(cr);
-    VALUE key = rb_ivar_get(self, rb_intern("index"));
     VALUE v;
+    struct tvar_slot *slot = DATA_PTR(self);
 
     if (tx->nesting == 0) {
-        uint32_t index = FIX2INT(key);
-        struct rs_slot *slot = ractor_space_index_ref(rs, index);
         rs_slot_lock(slot);
         {
             uint64_t new_version = ractor_space_new_version(rs);
@@ -551,10 +415,9 @@ ractor_space_tvar_value_increment(rb_execution_context_t *ec, VALUE self, VALUE 
         rs_slot_unlock(slot);
     }
     else {
-        // Ractor[key] += inc
-        v = ractor_space_tx_get(rs, tx, key);
+        v = ractor_space_tx_get(tx, slot, self);
         v = ractor_space_calc_inc(v, inc);
-        ractor_space_tx_set(rs, tx, key, v);
+        ractor_space_tx_set(tx, v, slot, self);
     }
 
     return v;
@@ -584,6 +447,96 @@ static const rb_data_type_t lock_data_type = {
     {NULL, ractor_lock_free, NULL,},
     0, 0, RUBY_TYPED_FREE_IMMEDIATELY
 };
+
+static void *
+slot_lock(void *ptr)
+{
+    struct tvar_slot *slot = (struct tvar_slot *)ptr;
+    rs_slot_lock(slot);
+    return NULL;
+}
+
+struct tvar_slot *
+tvar_slot_ptr(VALUE v)
+{
+    if (rb_typeddata_is_kind_of(v, &tvar_data_type)) {
+        return DATA_PTR(v);
+    }
+    else {
+        rb_raise(rb_eArgError, "TVar is needed");
+    }
+}
+
+static VALUE
+ractor_space_lock_begin(rb_execution_context_t *ec, VALUE self, VALUE tvars)
+{
+    rb_ractor_t *cr = rb_ec_ractor_ptr(ec);
+    struct ractor_space_tx *tx = ractor_space_tx(cr);
+    int i;
+
+    if (tx->nesting > 0) {
+        rb_raise(rb_eRactorTxError, "can not nest lock");
+    }
+
+    tx->nesting = 1;
+
+    int len = RARRAY_LENINT(tvars);
+    for (i=0; i<len; i++) {
+        VALUE tvar = RARRAY_AREF(tvars, i);
+        struct tvar_slot *slot = tvar_slot_ptr(tvar);
+
+        rb_thread_call_without_gvl(slot_lock, slot, NULL, NULL);
+        ractor_space_tx_add(tx, slot->value, slot, tvar);
+    }
+
+    tx->stop_adding = true;
+
+    return Qtrue;
+}
+
+static VALUE
+ractor_space_lock_commit(rb_execution_context_t *ec, VALUE self)
+{
+    rb_ractor_t *cr = rb_ec_ractor_ptr(ec);
+    struct ractor_space *rs = rb_ractor_space(ec);
+    struct ractor_space_tx *tx = ractor_space_tx(cr);
+
+    ractor_space_tx_sort(tx);
+
+    uint64_t new_version = ractor_space_new_version(rs);
+
+    for (uint32_t i=0; i<tx->copy_cnt; i++) {
+        struct rstx_slot *copy = &tx->copies[i];
+        struct tvar_slot *slot = copy->slot;
+
+        if (slot->value != copy->value) {
+            slot->version = new_version;
+            slot->value = copy->value;
+        }
+    }
+
+    rs->version = new_version;
+
+    return Qnil;
+}
+
+static VALUE
+ractor_space_lock_end(rb_execution_context_t *ec, VALUE self)
+{
+    rb_ractor_t *cr = rb_ec_ractor_ptr(ec);
+    struct ractor_space_tx *tx = ractor_space_tx(cr);
+    VM_ASSERT(tx->nesting > 0);
+
+    // release lock
+    for (uint32_t i=0; i<tx->copy_cnt; i++) {
+        rs_slot_unlock(tx->copies[i].slot);
+    }
+
+    tx->nesting = 0;
+    tx->copy_cnt = 0;
+    tx->stop_adding = false;
+    return Qnil;
+}
 
 static VALUE
 ractor_lock_new(rb_execution_context_t *ec, VALUE self)
@@ -665,9 +618,17 @@ struct ractor_lvar {
     VALUE value;
 };
 
+static void
+lvar_mark(void *ptr)
+{
+    struct ractor_lvar *lvar = (struct ractor_lvar *)ptr;
+    rb_gc_mark(lvar->lock);
+    rb_gc_mark(lvar->value);
+}
+
 static const rb_data_type_t lvar_data_type = {
     "Ractor::LVar",
-    {NULL, RUBY_TYPED_DEFAULT_FREE, NULL,},
+    {lvar_mark, RUBY_TYPED_DEFAULT_FREE, NULL,},
     0, 0, RUBY_TYPED_FREE_IMMEDIATELY
 };
 
@@ -710,16 +671,18 @@ static void
 Init_ractor_space(void)
 {
     struct ractor_space *rs = rb_ractor_space(GET_EC());
-    rs->slot_cnt = 0;
+    rs->slot_index = 0;
     rs->version = 0;
-    rb_native_mutex_initialize(&rs->slots_lock);
+    rb_native_mutex_initialize(&rs->slot_index_lock);
 
-    VALUE rb_cRactorSpace = rb_define_class_under(rb_cRactor, "Space", rb_cObject);
-    rb_eRactorSpaceError = rb_define_class_under(rb_cRactorSpace, "Error", rb_eRuntimeError);
-    rb_eRactorSpaceTransactionError = rb_define_class_under(rb_cRactorSpace, "TransactionError", rb_eRuntimeError);
-    rb_eRactorSpaceRetry = rb_define_class_under(rb_cRactorSpace, "Retry", rb_eException);
+    rb_eRactorTxError = rb_define_class_under(rb_cRactor, "TransactionError", rb_eRuntimeError);
+    rb_eRactorTxRetry = rb_define_class_under(rb_cRactor, "RetryTransaction", rb_eException);
 
-    rb_cRactorSpaceTVar = rb_define_class_under(rb_cRactorSpace, "TVar", rb_cObject);
+    rb_cRactorTVar = rb_define_class_under(rb_cRactor, "TVar", rb_cObject);
     rb_cRactorLock = rb_define_class_under(rb_cRactor, "Lock", rb_cObject);
     rb_cRactorLVar = rb_define_class_under(rb_cRactor, "LVar", rb_cObject);
+
+    rb_exc_tx_retry = rb_exc_new_cstr(rb_eRactorTxRetry, "Ractor::RetryTransaction");
+    rb_obj_freeze(rb_exc_tx_retry);
+    rb_gc_register_mark_object(rb_exc_tx_retry);
 }
