@@ -413,7 +413,7 @@ ractor_space_lock_commit(rb_execution_context_t *ec, VALUE self)
     struct ractor_space *rs = rb_ractor_space(ec);
     struct ractor_space_tx *tx = ractor_space_tx(cr);
 
-    // TODO: sort
+    ractor_space_tx_sort(tx);
 
     uint64_t new_version = ractor_space_new_version(rs);
 
@@ -713,7 +713,7 @@ Init_ractor_space(void)
     rs->slot_cnt = 0;
     rs->version = 0;
     rb_native_mutex_initialize(&rs->slots_lock);
-    
+
     VALUE rb_cRactorSpace = rb_define_class_under(rb_cRactor, "Space", rb_cObject);
     rb_eRactorSpaceError = rb_define_class_under(rb_cRactorSpace, "Error", rb_eRuntimeError);
     rb_eRactorSpaceTransactionError = rb_define_class_under(rb_cRactorSpace, "TransactionError", rb_eRuntimeError);
