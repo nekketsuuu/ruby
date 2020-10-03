@@ -211,6 +211,7 @@ ractor_free(void *ptr)
     rb_native_cond_destroy(&r->wait.cond);
     ractor_queue_free(&r->incoming_queue);
     ractor_waiting_list_free(&r->taking_ractors);
+    ractor_tx_free(r);
     ruby_xfree(r);
 }
 

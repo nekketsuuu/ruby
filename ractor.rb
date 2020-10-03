@@ -163,36 +163,26 @@ class Ractor
     close_outgoing
   end
 
-  ## Shared values
-
-  class Space
-    def self.[](key)
-      __builtin_cexpr! %q{
-        ractor_space_get(ec, key)
-      }
-    end
-
-    def self.[]=(key, value)
-      __builtin_cexpr! %q{
-        ractor_space_set(ec, key, value)
-      }
-    end
-  end
+  ## Transactional Variables
 
   def self.atomically
     if Primitive.ractor_space_tx_begin
       # fast commit
       begin
-        Primitive.ractor_space_tx_commit yield
+        while true
+          ret = yield
+          return ret if Primitive.ractor_space_tx_commit
+          Primitive.ractor_space_tx_reset
+        end
       rescue Ractor::RetryTransaction
         Primitive.ractor_space_tx_reset
         retry
+      ensure
+        Primitive.ractor_space_tx_end
       end
     else
       yield
     end
-  ensure
-    Primitive.ractor_space_tx_end
   end
 
   def self.lock *vars
@@ -205,25 +195,36 @@ class Ractor
 
   class TVar
     def self.new init_value
-      Primitive.ractor_space_tvar_new init_value
+      Primitive.ractor_tvar_new init_value
     end
 
+    # Ractor.atomically is not needed,
+    # but need it to make a transaction.
     def value
-      Primitive.ractor_space_tvar_value
+      Primitive.ractor_tvar_value
     end
 
+    # should in Ractor.atomically
     def value=(val)
-      Primitive.ractor_space_tvar_value_set(val)
+      Primitive.ractor_tvar_value_set(val)
     end
 
+    # self.value += 1
     def increment inc = 1
-      Primitive.ractor_space_tvar_value_increment(inc)
+      Primitive.ractor_tvar_value_increment(inc)
     end
 
     def inspect
       index = Primitive.cexpr! %q{ tvar_slot_ptr(self)->index }
       value = Primitive.cexpr! %q{ tvar_slot_ptr(self)->value }
       "<TVar #{index} value:#{value}>"
+    end
+
+    private
+    def __increment_any__ inc = 1
+      Ractor.atomically do
+        self.value += inc
+      end
     end
   end
 
@@ -254,9 +255,5 @@ class Ractor
     def value=(obj)
       Primitive.ractor_lvar_value_set obj
     end
-  end
-
-  def self.bp
-    __builtin_cexpr! '(bp(), 0)'
   end
 end
