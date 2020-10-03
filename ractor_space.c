@@ -85,7 +85,7 @@ ractor_space_next_version(struct ractor_space *rs)
     {
         rs->version++;
         version = rs->version;
-        RUBY_DEBUG_LOG2(file, line, "new_version:%lu", version);
+        RUBY_DEBUG_LOG("new_version:%lu", version);
     }
     rb_native_mutex_unlock(&rs->version_lock);
 
@@ -325,7 +325,7 @@ ractor_space_tx_commit(rb_execution_context_t *ec, VALUE self)
             // ec->errinfo = rb_exc_tx_retry;
             // EC_JUMP_TAG(ec, TAG_RAISE);
 
-            return Qtrue;
+            return Qfalse;
         }
         else {
             RUBY_DEBUG_LOG("lock slot:%lu tx:%lu rs:%lu", slot->version, tx->version, rs->version);
